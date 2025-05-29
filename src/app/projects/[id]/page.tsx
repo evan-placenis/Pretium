@@ -1,11 +1,13 @@
-'use client';
+// app/projects/[id]/page.tsx
 
-import { useParams } from 'next/navigation';
 import ProjectPage from './projects_page';
 
-export default function Page() {
-  const params = useParams();
-  const id = params.id as string;
-  
-  return <ProjectPage id={id} />;
+interface PageProps {
+  params: {
+    id: string;
+  };
+}
+
+export default function Page({ params }: PageProps) {
+  return <ProjectPage id={params.id} />;
 }
