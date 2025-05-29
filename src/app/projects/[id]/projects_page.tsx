@@ -1,5 +1,5 @@
 'use client';
-import { useState, useEffect, use } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { supabase } from '@/lib/supabase';
@@ -7,8 +7,7 @@ import { Project, Report } from '@/lib/supabase';
 import { handleExcelUpload } from '@/lib/utils';
 import * as XLSX from 'xlsx';
 
-export default function ProjectPage({ params }: { params: Promise<{ id: string }> }) {
-  const resolvedParams = use(params);
+export default function ProjectPage({ id }: { id: string }) {
   const [project, setProject] = useState<Project | null>(null);
   const [reports, setReports] = useState<Report[]>([]);
   const [loading, setLoading] = useState(true);
@@ -27,7 +26,7 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
         const { data: projectData, error: projectError } = await supabase
           .from('projects')
           .select('*')
-          .eq('id', resolvedParams.id)
+          .eq('id', id)
           .single();
 
         if (projectError) throw projectError;
@@ -37,7 +36,7 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
         const { data: reportsData, error: reportsError } = await supabase
           .from('reports')
           .select('*')
-          .eq('project_id', resolvedParams.id)
+          .eq('project_id', id)
           .order('created_at', { ascending: false });
 
         if (reportsError) throw reportsError;
@@ -51,7 +50,7 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
     };
 
     fetchProjectAndReports();
-  }, [resolvedParams.id]);
+  }, [id]);
 
   const handleDelete = async () => {
     if (!confirm('Are you sure you want to delete this project? This action cannot be undone.')) {
@@ -63,7 +62,7 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
       const { error: deleteError } = await supabase
         .from('projects')
         .delete()
-        .eq('id', resolvedParams.id);
+        .eq('id', id);
 
       if (deleteError) throw deleteError;
       router.push('/dashboard');
@@ -127,7 +126,7 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
       const { error: updateError } = await supabase
         .from('projects')
         .update(fileData)
-        .eq('id', resolvedParams.id);
+        .eq('id', id);
 
       if (updateError) throw updateError;
 
@@ -135,7 +134,7 @@ export default function ProjectPage({ params }: { params: Promise<{ id: string }
       const { data: projectData, error: projectError } = await supabase
         .from('projects')
         .select('*')
-        .eq('id', resolvedParams.id)
+        .eq('id', id)
         .single();
 
       if (projectError) throw projectError;
