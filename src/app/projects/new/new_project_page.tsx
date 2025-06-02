@@ -11,8 +11,8 @@ export default function NewProject() {
   const [user, setUser] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
   const [fileData, setFileData] = useState<any>(null);
-
   const [project_name, setProjectName] = useState('');
+  const [showExcelUpload, setShowExcelUpload] = useState(false);
 
   const router = useRouter();
 
@@ -58,8 +58,8 @@ export default function NewProject() {
       return;
     }
 
-    if (!fileData || Object.keys(fileData).length === 0) {
-      setError('Please upload an Excel file with project data.');
+    if (!project_name.trim()) {
+      setError('Please enter a project name.');
       return;
     }
 
@@ -70,15 +70,18 @@ export default function NewProject() {
       const projectData = {
         project_name: project_name.trim(),
         user_id: user.id,
-        ...fileData // Spread all fields from the Excel sheet (vertical format)
-        
+        created_at: new Date().toISOString(),
+        ...(fileData && Object.keys(fileData).length > 0 ? fileData : {}) // Only include Excel data if it exists
       };
+      
       const { error: insertError } = await supabase
         .from('projects')
         .insert(projectData);
+      
       if (insertError) {
         throw new Error(insertError.message);
       }
+      
       router.push('/dashboard');
     } catch (error: any) {
       console.error('Error creating project:', error);
@@ -107,34 +110,10 @@ export default function NewProject() {
           </div>
         )}
 
-        <div className="card" style={{ marginBottom: "1.5rem" }}>
-          <div className="card-body">
-            <h3 style={{ marginBottom: "1rem" }}>Import from Excel</h3>
-            <p style={{ marginBottom: "1rem" }} className="text-secondary">
-              Upload an Excel file to automatically fill in the project details. The Excel file should have columns for Project Name, Location, Date, and Description.
-            </p>
-            <input
-              type="file"
-              accept=".xlsx,.xls"
-              onChange={handleFileUpload}
-              style={{ display: 'none' }}
-              id="excel-upload"
-            />
-            <label htmlFor="excel-upload" className="btn btn-secondary" style={{ marginBottom: "1rem" }}>
-              Upload Info Sheet (Excel File)
-            </label>
-            {fileData && (
-              <p style={{ fontSize: "0.875rem", color: "var(--color-success)" }}>
-                ✓ Excel file loaded successfully
-              </p>
-            )}
-          </div>
-        </div>
-
         <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
           <div className="form-group">
             <label htmlFor="project_name" className="form-label">
-              Project Name (Display Name)
+              Project Name (Display Name) *
             </label>
             <input
               type="text"
@@ -143,12 +122,58 @@ export default function NewProject() {
               onChange={(e) => setProjectName(e.target.value)}
               required
               className="form-input"
+              placeholder="Enter project name..."
             />
           </div>
+
+          <div className="card">
+            <div className="card-body">
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                <h3 style={{ margin: 0 }}>Import from Excel (Optional)</h3>
+                <button
+                  type="button"
+                  onClick={() => setShowExcelUpload(!showExcelUpload)}
+                  className="btn btn-secondary btn-sm"
+                >
+                  {showExcelUpload ? 'Hide Upload' : 'Add Excel Data'}
+                </button>
+              </div>
+              
+              {showExcelUpload && (
+                <>
+                  <p style={{ marginBottom: "1rem" }} className="text-secondary">
+                    Upload an Excel file to automatically fill in the project details. The Excel file should have columns for Project Name, Location, Date, and Description.
+                  </p>
+                  <input
+                    type="file"
+                    accept=".xlsx,.xls"
+                    onChange={handleFileUpload}
+                    style={{ display: 'none' }}
+                    id="excel-upload"
+                  />
+                  <label htmlFor="excel-upload" className="btn btn-secondary" style={{ marginBottom: "1rem" }}>
+                    Upload Info Sheet (Excel File)
+                  </label>
+                  {fileData && (
+                    <p style={{ fontSize: "0.875rem", color: "var(--color-success)" }}>
+                      ✓ Excel file loaded successfully
+                    </p>
+                  )}
+                </>
+              )}
+              
+              {!showExcelUpload && (
+                <p className="text-secondary" style={{ fontSize: '0.875rem' }}>
+                  You can add detailed project information later by uploading an Excel file from the project page.
+                </p>
+              )}
+            </div>
+          </div>
+
           <div style={{ marginTop: "1rem" }}>
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || !project_name.trim()}
               className="btn btn-primary"
               style={{ width: '100%' }}
             >

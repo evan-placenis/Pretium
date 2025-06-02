@@ -17,6 +17,7 @@ export default function NewReport() {
   const searchParams = useSearchParams();
   const projectId = searchParams.get('project_id');
   const reportId = searchParams.get('reportId');
+  const selectedImageIds = searchParams.get('selected_images');
 
   useEffect(() => {
     const getUser = async () => {
@@ -52,6 +53,44 @@ export default function NewReport() {
     getUser();
     fetchProject();
   }, [projectId, router]);
+
+  // Load selected images when returning from image selection
+  useEffect(() => {
+    const loadSelectedImages = async () => {
+      if (!selectedImageIds || !projectId) return;
+      
+      setLoading(true);
+      setError(null);
+      
+      try {
+        const imageIds = selectedImageIds.split(',');
+        const { data, error } = await supabase
+          .from('project_images')
+          .select('*')
+          .in('id', imageIds);
+          
+        if (error) throw error;
+        
+        setAllImages(prev => {
+          // Avoid duplicates by id
+          const newImages = (data || []).filter(img => !prev.some(existing => existing.id === img.id));
+          return [...prev, ...newImages];
+        });
+        
+        // Clear the URL parameter after loading
+        const newUrl = new URL(window.location.href);
+        newUrl.searchParams.delete('selected_images');
+        window.history.replaceState({}, '', newUrl.toString());
+        
+      } catch (error: any) {
+        setError('Failed to load selected images: ' + error.message);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadSelectedImages();
+  }, [selectedImageIds, projectId]);
 
   const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files;
@@ -145,6 +184,7 @@ export default function NewReport() {
             project_id: project!.id,
             bullet_points: bulletPoints,
             generated_content: '', // Will be updated after generation
+            user_id: user.id, // Add user tracking
           },
         ])
         .select()
@@ -190,7 +230,8 @@ export default function NewReport() {
         report_id: reportData.id,
         url: img.url,
         tag: img.tag,
-        description: img.description
+        description: img.description,
+        user_id: user.id // Add user tracking
       })));
 
       // Redirect to the report editor
@@ -357,17 +398,18 @@ export default function NewReport() {
                 style={{ display: 'none' }}
                 id="image-upload"
               />
-              <label htmlFor="image-upload" className="btn btn-secondary">
-                Import From Local Files
-              </label>
+              
               <button 
                 type="button"
-                onClick={handleImportProjectImages}
+                onClick={() => router.push(`/projects/${projectId}/images?mode=select&returnTo=reports`)}
                 className="btn btn-secondary"
                 disabled={loading}
               >
-                Import From Phone App
+                Select Photos
               </button>
+              <label htmlFor="image-upload" className="btn btn-secondary">
+                Import From Local Files
+              </label>
               <button 
                 onClick={testImageDocument}
                 className="btn btn-primary"

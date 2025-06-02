@@ -104,6 +104,7 @@ export type Report = {
   generated_content: string;
   created_at: string;
   updated_at: string;
+  user_id?: string;
 };
 
 export type ReportImage = {
@@ -112,6 +113,7 @@ export type ReportImage = {
   url: string;
   description: string;
   tag: 'overview' | 'deficiency' | null;
+  user_id?: string;
 };
 
 export type ProjectImage = {
@@ -121,7 +123,8 @@ export type ProjectImage = {
   tag: 'overview' | 'deficiency' | null;
   created_at: string;
   project_id: string;
-}
+  user_id?: string;
+};
 
 export type ChatMessage = {
   id: string;

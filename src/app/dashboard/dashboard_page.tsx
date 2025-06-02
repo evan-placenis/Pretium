@@ -7,8 +7,10 @@ import { supabase, Project } from '@/lib/supabase';
 
 export default function Dashboard() {
   const [projects, setProjects] = useState<Project[]>([]);
+  const [allProjects, setAllProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [user, setUser] = useState<any>(null);
+  const [projectFilter, setProjectFilter] = useState<'all' | 'mine'>('all');
   const router = useRouter();
 
   useEffect(() => {
@@ -52,10 +54,10 @@ export default function Dashboard() {
         try {
           console.log(`Attempt ${attempts} to fetch projects`);
           
+          // Fetch ALL projects (not just user's own)
           const response = await supabase
             .from('projects')
             .select('*')
-            .eq('user_id', userId)
             .order('created_at', { ascending: false });
           
           if (response.error) {
@@ -78,17 +80,36 @@ export default function Dashboard() {
       if (!success) {
         console.error('All attempts to fetch projects failed:', fetchError);
         // Handle the error but don't throw - we'll just show empty state
+        setAllProjects([]);
         setProjects([]);
       } else {
         console.log(`Dashboard: Found ${data?.length || 0} projects`);
-        setProjects(data || []);
+        setAllProjects(data || []);
+        // Apply current filter
+        applyProjectFilter(data || [], projectFilter, userId);
       }
     } catch (error) {
       console.error('Unexpected error in fetchProjects:', error);
       // Set empty projects on error rather than crashing
+      setAllProjects([]);
       setProjects([]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const applyProjectFilter = (projectsData: Project[], filter: 'all' | 'mine', userId: string) => {
+    if (filter === 'mine') {
+      setProjects(projectsData.filter(project => project.user_id === userId));
+    } else {
+      setProjects(projectsData);
+    }
+  };
+
+  const handleFilterChange = (filter: 'all' | 'mine') => {
+    setProjectFilter(filter);
+    if (user) {
+      applyProjectFilter(allProjects, filter, user.id);
     }
   };
 
@@ -116,8 +137,31 @@ export default function Dashboard() {
       {/* Main Content */}
       <div className="container page-content">
         <header style={{ display: "flex", marginBottom: "1.5rem", justifyContent: 'space-between', alignItems: 'center' }}>
-          <h1>Active Projects</h1>
-          <Link href="/projects/new" className="btn btn-primary">New Project</Link>
+          <div>
+            <div style={{ marginBottom: '0.5rem' }}>
+              <span style={{ fontSize: '1.1rem', color: 'var(--color-text-light)' }}>
+                Hello, {user?.email?.split('@')[0] || user?.user_metadata?.full_name || 'User'}!
+              </span>
+            </div>
+            <h1>Active Projects</h1>
+            <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+              <button
+                onClick={() => handleFilterChange('all')}
+                className={`btn btn-sm ${projectFilter === 'all' ? 'btn-primary' : 'btn-secondary'}`}
+              >
+                All Projects ({allProjects.length})
+              </button>
+              <button
+                onClick={() => handleFilterChange('mine')}
+                className={`btn btn-sm ${projectFilter === 'mine' ? 'btn-primary' : 'btn-secondary'}`}
+              >
+                My Projects ({allProjects.filter(p => p.user_id === user?.id).length})
+              </button>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
+            <Link href="/projects/new" className="btn btn-primary">New Project</Link>
+          </div>
         </header>
 
         {projects.length === 0 ? (
@@ -187,9 +231,12 @@ export default function Dashboard() {
                     <strong>Title:</strong> {project["Project Title"]}
                   </p>
                   
-                  <div style={{ marginTop: "0.5rem" }}>
+                  <div style={{ marginTop: "0.5rem", display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span className="badge badge-secondary">
                       View Reports
+                    </span>
+                    <span style={{ fontSize: '0.75rem', color: 'var(--color-text-light)' }}>
+                      {project.user_id === user?.id ? 'Your project' : 'Shared project'}
                     </span>
                   </div>
                 </div>

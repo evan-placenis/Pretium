@@ -1,38 +1,130 @@
 "use client";
 import { useEffect, useState } from 'react';
-import { useRouter, useParams } from 'next/navigation';
+import { useRouter, useParams, useSearchParams } from 'next/navigation';
 import { supabase, ProjectImage } from '@/lib/supabase';
 
 
 export default function ProjectImagesPage() {
   const router = useRouter();
   const params = useParams();
+  const searchParams = useSearchParams();
   const projectId = Array.isArray(params?.id) ? params.id[0] : params?.id;
+  const selectionMode = searchParams.get('mode') === 'select';
+  const returnTo = searchParams.get('returnTo');
+  
   const [images, setImages] = useState<ProjectImage[]>([]);
+  const [filteredImages, setFilteredImages] = useState<ProjectImage[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [deleteLoading, setDeleteLoading] = useState<string | null>(null);
   const [selectedImage, setSelectedImage] = useState<ProjectImage | null>(null);
   const [editMode, setEditMode] = useState(false);
   const [editDescription, setEditDescription] = useState('');
   const [editTag, setEditTag] = useState<'overview' | 'deficiency' | null>(null);
   const [updateLoading, setUpdateLoading] = useState(false);
+  const [uploadLoading, setUploadLoading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<string>('');
+  
+  // Selection and filtering state
+  const [selectedImages, setSelectedImages] = useState<Set<string>>(new Set());
+  const [dateFilter, setDateFilter] = useState<string>('');
+  const [tagFilter, setTagFilter] = useState<string>('');
+  const [descriptionFilter, setDescriptionFilter] = useState<string>('');
+  const [userFilter, setUserFilter] = useState<string>(''); // 'all', 'mine', 'others'
+  const [reportUsageFilter, setReportUsageFilter] = useState<string>(''); // 'all', 'unused', 'used'
+  
+  // State for tracking images in reports and current user
+  const [imagesInReports, setImagesInReports] = useState<Set<string>>(new Set());
+  const [currentUser, setCurrentUser] = useState<any>(null);
 
   useEffect(() => {
     const fetchImages = async () => {
       setLoading(true);
       setError(null);
-      const { data, error } = await supabase
-        .from('project_images')
-        .select('*')
-        .eq('project_id', projectId)
-        .order('created_at', { ascending: false });
-      if (error) setError(error.message);
-      setImages(data || []);
-      setLoading(false);
+      
+      try {
+        // Get current user
+        const { data: { user } } = await supabase.auth.getUser();
+        setCurrentUser(user);
+        
+        // Fetch project images
+        const { data, error } = await supabase
+          .from('project_images')
+          .select('*')
+          .eq('project_id', projectId)
+          .order('created_at', { ascending: false });
+          
+        if (error) throw error;
+        
+        setImages(data || []);
+        setFilteredImages(data || []);
+        
+        // Fetch which images are used in reports
+        const { data: reportImagesData, error: reportImagesError } = await supabase
+          .from('report_images')
+          .select('url')
+          .not('url', 'is', null);
+          
+        if (reportImagesError) {
+          console.warn('Could not fetch report images:', reportImagesError);
+        } else {
+          // Create a set of image URLs that are used in reports
+          const usedImageUrls = new Set(reportImagesData?.map(ri => ri.url) || []);
+          setImagesInReports(usedImageUrls);
+        }
+        
+      } catch (error: any) {
+        setError(error.message);
+      } finally {
+        setLoading(false);
+      }
     };
+    
     if (projectId) fetchImages();
   }, [projectId]);
+
+  // Filter images based on criteria
+  useEffect(() => {
+    let filtered = [...images];
+    
+    // Date filter
+    if (dateFilter) {
+      const filterDate = new Date(dateFilter);
+      filtered = filtered.filter(img => {
+        const imgDate = new Date(img.created_at);
+        return imgDate.toDateString() === filterDate.toDateString();
+      });
+    }
+    
+    // Tag filter
+    if (tagFilter && tagFilter !== 'all') {
+      filtered = filtered.filter(img => img.tag === tagFilter);
+    }
+    
+    // Description filter
+    if (descriptionFilter) {
+      filtered = filtered.filter(img => 
+        img.description?.toLowerCase().includes(descriptionFilter.toLowerCase())
+      );
+    }
+    
+    // User filter - Now implemented with user_id tracking
+    if (userFilter === 'mine' && currentUser) {
+      filtered = filtered.filter(img => img.user_id === currentUser.id);
+    } else if (userFilter === 'others' && currentUser) {
+      filtered = filtered.filter(img => img.user_id !== currentUser.id && img.user_id != null);
+    }
+    
+    // Report usage filter
+    if (reportUsageFilter === 'unused') {
+      filtered = filtered.filter(img => !imagesInReports.has(img.url));
+    } else if (reportUsageFilter === 'used') {
+      filtered = filtered.filter(img => imagesInReports.has(img.url));
+    }
+    
+    setFilteredImages(filtered);
+  }, [images, dateFilter, tagFilter, descriptionFilter, userFilter, reportUsageFilter, imagesInReports, currentUser]);
 
   const handleImageClick = (image: ProjectImage) => {
     setSelectedImage(image);
@@ -93,26 +185,311 @@ export default function ProjectImagesPage() {
     setUpdateLoading(false);
   };
 
+  const handlePhotoUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files;
+    if (!files || files.length === 0) return;
+
+    if (!currentUser) {
+      setError('You must be logged in to upload photos');
+      return;
+    }
+
+    // Clear any existing messages
+    setError(null);
+    setSuccessMessage(null);
+    
+    setUploadLoading(true);
+
+    try {
+      const uploadedImages: ProjectImage[] = [];
+
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        setUploadProgress(`Uploading ${file.name} (${i + 1}/${files.length})`);
+        
+        if (!file.type.startsWith('image/')) {
+          setError(`Skipping ${file.name} - not an image file`);
+          continue;
+        }
+
+        // Upload to Supabase Storage
+        const fileExt = file.name.split('.').pop();
+        const fileName = `${Date.now()}-${Math.random()}.${fileExt}`;
+        const filePath = `${projectId}/${fileName}`;
+
+        const { error: uploadError } = await supabase.storage
+          .from('project-images')
+          .upload(filePath, file);
+
+        if (uploadError) {
+          console.error('Upload error:', uploadError);
+          setError(`Failed to upload ${file.name}: ${uploadError.message}`);
+          continue;
+        }
+
+        // Get public URL
+        const { data: { publicUrl } } = supabase.storage
+          .from('project-images')
+          .getPublicUrl(filePath);
+
+        // Save to database
+        const { data: imageData, error: dbError } = await supabase
+          .from('project_images')
+          .insert([
+            {
+              project_id: projectId,
+              url: publicUrl,
+              description: '',
+              tag: null,
+              user_id: currentUser.id
+            }
+          ])
+          .select()
+          .single();
+
+        if (dbError) {
+          console.error('Database error:', dbError);
+          setError(`Failed to save ${file.name} to database: ${dbError.message}`);
+          continue;
+        }
+
+        uploadedImages.push(imageData);
+      }
+
+      // Add uploaded images to local state
+      if (uploadedImages.length > 0) {
+        setImages(prev => [...uploadedImages, ...prev]);
+        setSuccessMessage(`Successfully uploaded ${uploadedImages.length} photo${uploadedImages.length !== 1 ? 's' : ''}!`);
+        setError(null);
+        
+        // Clear success message after 3 seconds
+        setTimeout(() => setSuccessMessage(null), 3000);
+      }
+
+    } catch (error: any) {
+      console.error('Unexpected upload error:', error);
+      setError('An unexpected error occurred during upload');
+    } finally {
+      setUploadLoading(false);
+      setUploadProgress('');
+      // Clear the input
+      event.target.value = '';
+    }
+  };
+
+  // Selection handling functions
+  const toggleImageSelection = (imageId: string) => {
+    setSelectedImages(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(imageId)) {
+        newSet.delete(imageId);
+      } else {
+        newSet.add(imageId);
+      }
+      return newSet;
+    });
+  };
+
+  const handleSelectAll = () => {
+    setSelectedImages(new Set(filteredImages.map(img => img.id)));
+  };
+
+  const handleDeselectAll = () => {
+    setSelectedImages(new Set());
+  };
+
+  const handleConfirmSelection = () => {
+    if (selectedImages.size === 0) {
+      setError('Please select at least one image');
+      return;
+    }
+    
+    const selectedImageData = filteredImages.filter(img => selectedImages.has(img.id));
+    const imageIds = Array.from(selectedImages).join(',');
+    
+    if (returnTo === 'reports') {
+      router.push(`/reports/new?project_id=${projectId}&selected_images=${imageIds}`);
+    } else {
+      // Default back to project page
+      router.push(`/projects/${projectId}`);
+    }
+  };
+
   return (
     <div className="container page-content" style={{ background: 'var(--color-bg)', minHeight: '100vh' }}>
-      <h1 style={{ marginBottom: '2rem', color: 'var(--color-primary)' }}>All Project Images</h1>
-      <button
-        className="btn btn-secondary"
-        style={{ marginBottom: '2rem', color: 'var(--color-primary)' }}
-        onClick={() => router.push(`/projects/${projectId}`)}
-      >
-        ← Back to Project
-      </button>
+      <h1 style={{ marginBottom: '2rem', color: 'var(--color-primary)' }}>
+        {selectionMode ? 'Select Photos for Report' : 'All Project Images'}
+      </h1>
       
+      <div style={{ display: 'flex', gap: '1rem', marginBottom: '2rem', flexWrap: 'wrap' }}>
+        <button
+          className="btn btn-secondary"
+          style={{ color: 'var(--color-primary)' }}
+          onClick={() => router.push(`/projects/${projectId}`)}
+        >
+          ← Back to Project
+        </button>
+        
+        {!selectionMode && (
+          <>
+            <input
+              type="file"
+              accept="image/*"
+              multiple
+              onChange={handlePhotoUpload}
+              style={{ display: 'none' }}
+              id="photo-upload-input"
+              disabled={uploadLoading}
+            />
+            <label 
+              htmlFor="photo-upload-input"
+              className="btn btn-primary"
+              style={{ 
+                cursor: uploadLoading ? 'not-allowed' : 'pointer',
+                opacity: uploadLoading ? 0.6 : 1
+              }}
+            >
+              {uploadLoading ? uploadProgress : '📷 Upload Photos'}
+            </label>
+          </>
+        )}
+        
+        {selectionMode && (
+          <>
+            <button
+              className="btn btn-primary"
+              onClick={handleConfirmSelection}
+              disabled={selectedImages.size === 0}
+              style={{ marginLeft: 'auto' }}
+            >
+              Import {selectedImages.size} Selected Photo{selectedImages.size !== 1 ? 's' : ''}
+            </button>
+            <button
+              className="btn btn-secondary"
+              onClick={handleSelectAll}
+            >
+              Select All
+            </button>
+            <button
+              className="btn btn-secondary"
+              onClick={handleDeselectAll}
+            >
+              Deselect All
+            </button>
+          </>
+        )}
+      </div>
+
+      {/* Filter Controls */}
+      <div className="card" style={{ marginBottom: '2rem' }}>
+        <div className="card-body">
+          <h3 style={{ marginBottom: '1rem' }}>Filter Photos</h3>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
+            <div>
+              <label className="form-label" style={{ color: 'var(--color-text)' }}>Filter by Date</label>
+              <input
+                type="date"
+                value={dateFilter}
+                onChange={(e) => setDateFilter(e.target.value)}
+                className="form-input"
+                style={{ width: '100%' }}
+              />
+            </div>
+            <div>
+              <label className="form-label" style={{ color: 'var(--color-text)' }}>Filter by Tag</label>
+              <select
+                value={tagFilter}
+                onChange={(e) => setTagFilter(e.target.value)}
+                className="form-input"
+                style={{ width: '100%' }}
+              >
+                <option value="">All Tags</option>
+                <option value="overview">Overview</option>
+                <option value="deficiency">Deficiency</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="form-label" style={{ color: 'var(--color-text)' }}>Filter by User</label>
+              <select
+                value={userFilter}
+                onChange={(e) => setUserFilter(e.target.value)}
+                className="form-input"
+                style={{ width: '100%' }}
+              >
+                <option value="">All Users</option>
+                <option value="mine">My Photos Only</option>
+                <option value="others">Others' Photos</option>
+              </select>
+            </div>
+            <div>
+              <label className="form-label" style={{ color: 'var(--color-text)' }}>Filter by Report Usage</label>
+              <select
+                value={reportUsageFilter}
+                onChange={(e) => setReportUsageFilter(e.target.value)}
+                className="form-input"
+                style={{ width: '100%' }}
+              >
+                <option value="">All Photos</option>
+                <option value="unused">Not Used in Reports</option>
+                <option value="used">Already Used in Reports</option>
+              </select>
+            </div>
+            <div>
+              <label className="form-label" style={{ color: 'var(--color-text)' }}>Search Description</label>
+              <input
+                type="text"
+                value={descriptionFilter}
+                onChange={(e) => setDescriptionFilter(e.target.value)}
+                placeholder="Search in descriptions..."
+                className="form-input"
+                style={{ width: '100%' }}
+              />
+            </div>
+            <div style={{ display: 'flex', alignItems: 'end', gap: '0.5rem' }}>
+              <button
+                onClick={() => {
+                  setDateFilter('');
+                  setTagFilter('');
+                  setDescriptionFilter('');
+                  setUserFilter('');
+                  setReportUsageFilter('');
+                }}
+                className="btn btn-secondary btn-sm"
+                style={{ width: '100%' }}
+              >
+                Clear Filters
+              </button>
+            </div>
+          </div>
+          <div style={{ marginTop: '1rem', fontSize: '0.875rem', color: 'var(--color-text-light)' }}>
+            Showing {filteredImages.length} of {images.length} photos
+          </div>
+        </div>
+      </div>
+      
+      {error && (
+        <div className="alert alert-error">{error}</div>
+      )}
+
+      {successMessage && (
+        <div className="alert alert-success" style={{ 
+          backgroundColor: 'rgba(40, 167, 69, 0.1)', 
+          color: 'var(--color-success)', 
+          border: '1px solid rgba(40, 167, 69, 0.3)',
+          marginBottom: '1rem'
+        }}>
+          {successMessage}
+        </div>
+      )}
+
       {loading ? (
         <div style={{ color: 'var(--color-primary)' }}>Loading...</div>
-      ) : error ? (
-        <div className="alert alert-error">{error}</div>
       ) : images.length === 0 ? (
         <div style={{ color: 'var(--color-text-light)' }}>No images found for this project.</div>
       ) : (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: '1.5rem' }}>
-          {images.map(img => (
+          {filteredImages.map(img => (
             <div
               key={img.id}
               className="card"
@@ -121,12 +498,36 @@ export default function ProjectImagesPage() {
                 position: 'relative',
                 background: 'var(--color-bg-card)',
                 color: 'var(--color-text)',
-                border: '1px solid var(--color-border-dark)',
+                border: selectionMode && selectedImages.has(img.id) 
+                  ? '3px solid var(--color-primary)' 
+                  : '1px solid var(--color-border-dark)',
                 boxShadow: 'var(--shadow-sm)',
                 cursor: 'pointer',
               }}
-              onClick={() => handleImageClick(img)}
+              onClick={() => selectionMode ? toggleImageSelection(img.id) : handleImageClick(img)}
             >
+              {selectionMode && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    top: '0.5rem',
+                    left: '0.5rem',
+                    width: '20px',
+                    height: '20px',
+                    borderRadius: '3px',
+                    border: '2px solid var(--color-primary)',
+                    backgroundColor: selectedImages.has(img.id) ? 'var(--color-primary)' : 'white',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    zIndex: 2
+                  }}
+                >
+                  {selectedImages.has(img.id) && (
+                    <span style={{ color: 'white', fontSize: '12px', fontWeight: 'bold' }}>✓</span>
+                  )}
+                </div>
+              )}
               <img
                 src={img.url}
                 alt={img.description || 'Project image'}
@@ -137,6 +538,7 @@ export default function ProjectImagesPage() {
                   borderRadius: '0.25rem',
                   marginBottom: '1rem',
                   background: 'var(--color-primary)',
+                  opacity: selectionMode && selectedImages.has(img.id) ? 0.8 : 1,
                 }}
               />
               <div style={{ marginBottom: '0.5rem', fontSize: '0.9rem', color: 'var(--color-text-light)' }}>
@@ -150,25 +552,65 @@ export default function ProjectImagesPage() {
                   {img.tag}
                 </span>
               )}
-              <button
-                className="btn btn-danger btn-sm"
-                style={{ 
-                  position: 'absolute', 
-                  top: '1rem', 
-                  right: '1rem', 
-                  background: 'var(--color-danger)', 
-                  color: 'white', 
-                  border: 'none',
-                  zIndex: 1
-                }}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleDelete(img.id);
-                }}
-                disabled={deleteLoading === img.id}
-              >
-                {deleteLoading === img.id ? 'Deleting...' : '×'}
-              </button>
+              <div style={{ fontSize: '0.75rem', color: 'var(--color-text-light)', marginBottom: '0.5rem' }}>
+                {new Date(img.created_at).toLocaleDateString()}
+                {img.user_id && (
+                  <span style={{ marginLeft: '0.5rem' }}>
+                    • {img.user_id === currentUser?.id ? (
+                      <span style={{ color: 'var(--color-primary)' }}>You</span>
+                    ) : (
+                      <span style={{ color: 'var(--color-text-lighter)' }}>Other User</span>
+                    )}
+                  </span>
+                )}
+              </div>
+              {/* Report usage indicator */}
+              {imagesInReports.has(img.url) ? (
+                <div style={{ 
+                  fontSize: '0.7rem', 
+                  color: 'var(--color-warning)', 
+                  backgroundColor: 'rgba(255, 193, 7, 0.1)',
+                  padding: '0.25rem 0.5rem',
+                  borderRadius: '0.25rem',
+                  marginBottom: '0.5rem',
+                  display: 'inline-block'
+                }}>
+                  ✓ Used in Report
+                </div>
+              ) : (
+                <div style={{ 
+                  fontSize: '0.7rem', 
+                  color: 'var(--color-success)', 
+                  backgroundColor: 'rgba(40, 167, 69, 0.1)',
+                  padding: '0.25rem 0.5rem',
+                  borderRadius: '0.25rem',
+                  marginBottom: '0.5rem',
+                  display: 'inline-block'
+                }}>
+                  ○ Not Used in Reports
+                </div>
+              )}
+              {!selectionMode && (
+                <button
+                  className="btn btn-danger btn-sm"
+                  style={{ 
+                    position: 'absolute', 
+                    top: '1rem', 
+                    right: '1rem', 
+                    background: 'var(--color-danger)', 
+                    color: 'white', 
+                    border: 'none',
+                    zIndex: 1
+                  }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleDelete(img.id);
+                  }}
+                  disabled={deleteLoading === img.id}
+                >
+                  {deleteLoading === img.id ? 'Deleting...' : '×'}
+                </button>
+              )}
             </div>
           ))}
         </div>
